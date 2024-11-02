@@ -1,0 +1,8 @@
+# Procfile
+web: gunicorn app:app
+
+# .gitignore
+__pycache__/
+*.pyc
+.env
+venv/

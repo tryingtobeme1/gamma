@@ -1,6 +1,0 @@
-Flask
-selenium
-pandas
-webdriver_manager
-requests
-beautifulsoup4
