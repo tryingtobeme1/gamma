@@ -2,6 +2,9 @@ import os
 import requests
 from flask import Flask, render_template_string
 import logging
+from bs4 import BeautifulSoup
+import time
+import json
 
 app = Flask(__name__)
 
@@ -10,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_sample_inventory(location):
-    sample_inventory = [
+    return [
         {
             'title': '2015 Honda Civic',
             'image_url': 'https://via.placeholder.com/150',
@@ -28,18 +31,90 @@ def get_sample_inventory(location):
             'year': '2018',
             'make': 'Toyota',
             'model': 'Camry'
-        },
-        {
-            'title': '2016 Ford Focus',
-            'image_url': 'https://via.placeholder.com/150',
-            'detail_url': '#',
-            'branch': location,
-            'year': '2016',
-            'make': 'Ford',
-            'model': 'Focus'
         }
     ]
-    return sample_inventory
+
+def scrape_kenny_upull(location):
+    urls = {
+        'Ottawa': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457192&nb_items=42&sort=date",
+        'Gatineau': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457182&nb_items=42&sort=date",
+        'Cornwall': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1576848&nb_items=42&sort=date"
+    }
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+    }
+    
+    try:
+        logger.info(f"Starting scrape for {location}")
+        
+        # Add delay to prevent rate limiting
+        time.sleep(1)
+        
+        response = requests.get(urls[location], headers=headers, timeout=20)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        inventory = []
+        
+        # Find all vehicle items
+        vehicle_containers = soup.find_all('div', class_='vehicle-container')
+        
+        if not vehicle_containers:
+            logger.warning(f"No vehicles found for {location}, falling back to sample data")
+            return get_sample_inventory(location)
+        
+        for container in vehicle_containers:
+            try:
+                # Get image
+                image_tag = container.find('img')
+                image_url = image_tag.get('data-src') if image_tag else 'https://via.placeholder.com/150'
+                title = image_tag.get('alt', 'Unknown Vehicle') if image_tag else 'Unknown Vehicle'
+                
+                # Get link
+                link_tag = container.find('a')
+                detail_url = link_tag.get('href', '#') if link_tag else '#'
+                
+                # Extract year, make, model from title
+                parts = title.split()
+                year = parts[0] if parts else "Unknown"
+                make = parts[1] if len(parts) > 1 else "Unknown"
+                model = parts[2] if len(parts) > 2 else "Unknown"
+                
+                car = {
+                    'title': title,
+                    'image_url': image_url,
+                    'detail_url': detail_url,
+                    'branch': location,
+                    'year': year,
+                    'make': make,
+                    'model': model
+                }
+                
+                inventory.append(car)
+                logger.info(f"Successfully processed vehicle: {title}")
+                
+            except Exception as e:
+                logger.error(f"Error processing vehicle: {str(e)}")
+                continue
+        
+        if not inventory:
+            logger.warning(f"No vehicles could be processed for {location}, falling back to sample data")
+            return get_sample_inventory(location)
+            
+        return inventory
+        
+    except requests.RequestException as e:
+        logger.error(f"Request error for {location}: {str(e)}")
+        return get_sample_inventory(location)
+    except Exception as e:
+        logger.error(f"General error for {location}: {str(e)}")
+        return get_sample_inventory(location)
 
 @app.route('/')
 def home():
@@ -82,11 +157,9 @@ def home():
             .button:hover { 
                 background-color: #0056b3; 
             }
-            .status {
+            .loading {
+                display: none;
                 margin-top: 20px;
-                padding: 10px;
-                border-radius: 5px;
-                background-color: #f8f9fa;
             }
             @media (max-width: 600px) { 
                 .button { 
@@ -94,17 +167,23 @@ def home():
                 } 
             }
         </style>
+        <script>
+            function showLoading(location) {
+                document.getElementById('loading').style.display = 'block';
+                return true;
+            }
+        </script>
     </head>
     <body>
         <div class="container">
             <h1 style="color: #007bff;">Kenny U-Pull Inventory Viewer</h1>
-            <div class="status">
-                ℹ️ Note: This is a demo version showing sample data while we work on live data integration.
-            </div>
             <div class="button-container">
-                <a href="/scrape/Ottawa" class="button">View Ottawa</a>
-                <a href="/scrape/Gatineau" class="button">View Gatineau</a>
-                <a href="/scrape/Cornwall" class="button">View Cornwall</a>
+                <a href="/scrape/Ottawa" class="button" onclick="return showLoading('Ottawa')">View Ottawa</a>
+                <a href="/scrape/Gatineau" class="button" onclick="return showLoading('Gatineau')">View Gatineau</a>
+                <a href="/scrape/Cornwall" class="button" onclick="return showLoading('Cornwall')">View Cornwall</a>
+            </div>
+            <div id="loading" class="loading">
+                Loading inventory... Please wait...
             </div>
         </div>
     </body>
@@ -114,7 +193,7 @@ def home():
 @app.route('/scrape/<location>')
 def scrape(location):
     logger.info(f"Received request for {location}")
-    inventory = get_sample_inventory(location)
+    inventory = scrape_kenny_upull(location)
     
     return render_template_string("""
     <!DOCTYPE html>
@@ -153,18 +232,34 @@ def scrape(location):
                 object-fit: cover;
                 border-radius: 10px;
             }
-            .back-link {
-                display: block;
-                text-align: center;
-                margin: 20px;
-                color: #007bff;
-                text-decoration: none;
+            .card h3 {
+                margin: 10px 0;
+                color: #333;
             }
-            .status {
-                margin: 20px 0;
-                padding: 10px;
+            .card p {
+                margin: 5px 0;
+                color: #666;
+            }
+            .back-link {
+                display: inline-block;
+                padding: 10px 20px;
+                background-color: #007bff;
+                color: white;
+                text-decoration: none;
                 border-radius: 5px;
-                background-color: #f8f9fa;
+                margin: 20px;
+                transition: background-color 0.3s;
+            }
+            .back-link:hover {
+                background-color: #0056b3;
+            }
+            .notice {
+                background-color: #fff3cd;
+                border: 1px solid #ffeeba;
+                color: #856404;
+                padding: 10px;
+                margin: 20px 0;
+                border-radius: 5px;
                 text-align: center;
             }
         </style>
@@ -172,19 +267,26 @@ def scrape(location):
     <body>
         <div class="container">
             <h1 style="color: #007bff; text-align: center;">{{ location }} Inventory</h1>
-            <div class="status">
-                ℹ️ Currently showing sample data for demonstration purposes.
+            {% if inventory|length == 2 %}
+            <div class="notice">
+                ⚠️ Showing sample data due to temporary access issues. Please try again later for live data.
             </div>
+            {% endif %}
             <div class="grid">
             {% for car in inventory %}
                 <div class="card">
                     <img src="{{ car['image_url'] }}" alt="{{ car['title'] }}" onerror="this.src='https://via.placeholder.com/150'">
                     <h3>{{ car['title'] }}</h3>
                     <p>Branch: {{ car['branch'] }}</p>
+                    {% if car['detail_url'] != '#' %}
+                    <p><a href="{{ car['detail_url'] }}" target="_blank" style="color: #007bff;">View Details</a></p>
+                    {% endif %}
                 </div>
             {% endfor %}
             </div>
-            <a href="/" class="back-link">Back to Home</a>
+            <div style="text-align: center;">
+                <a href="/" class="back-link">Back to Home</a>
+            </div>
         </div>
     </body>
     </html>
