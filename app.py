@@ -1,9 +1,6 @@
 import os
 import requests
 from flask import Flask, render_template_string
-from bs4 import BeautifulSoup
-import json
-import time
 import logging
 
 app = Flask(__name__)
@@ -12,72 +9,37 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def scrape_kenny_upull(location):
-    urls = {
-        'Ottawa': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457192&nb_items=42&sort=date",
-        'Gatineau': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457182&nb_items=42&sort=date",
-        'Cornwall': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1576848&nb_items=42&sort=date"
-    }
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Cache-Control': 'max-age=0'
-    }
-    
-    try:
-        logger.info(f"Attempting to scrape {location} inventory")
-        # Add delay to prevent rate limiting
-        time.sleep(2)
-        
-        # First try to get the page
-        response = requests.get(urls[location], headers=headers, timeout=30)
-        response.raise_for_status()
-        
-        logger.info(f"Successfully fetched page for {location}")
-        
-        # For testing/debugging, return some sample data
-        sample_inventory = [
-            {
-                'title': '2015 Honda Civic',
-                'image_url': 'https://via.placeholder.com/150',
-                'detail_url': '#',
-                'branch': location,
-                'year': '2015',
-                'make': 'Honda',
-                'model': 'Civic'
-            },
-            {
-                'title': '2018 Toyota Camry',
-                'image_url': 'https://via.placeholder.com/150',
-                'detail_url': '#',
-                'branch': location,
-                'year': '2018',
-                'make': 'Toyota',
-                'model': 'Camry'
-            },
-            {
-                'title': '2016 Ford Focus',
-                'image_url': 'https://via.placeholder.com/150',
-                'detail_url': '#',
-                'branch': location,
-                'year': '2016',
-                'make': 'Ford',
-                'model': 'Focus'
-            }
-        ]
-        
-        return sample_inventory
-
-    except requests.RequestException as e:
-        logger.error(f"Request error for {location}: {str(e)}")
-        return []
-    except Exception as e:
-        logger.error(f"General error for {location}: {str(e)}")
-        return []
+def get_sample_inventory(location):
+    sample_inventory = [
+        {
+            'title': '2015 Honda Civic',
+            'image_url': 'https://via.placeholder.com/150',
+            'detail_url': '#',
+            'branch': location,
+            'year': '2015',
+            'make': 'Honda',
+            'model': 'Civic'
+        },
+        {
+            'title': '2018 Toyota Camry',
+            'image_url': 'https://via.placeholder.com/150',
+            'detail_url': '#',
+            'branch': location,
+            'year': '2018',
+            'make': 'Toyota',
+            'model': 'Camry'
+        },
+        {
+            'title': '2016 Ford Focus',
+            'image_url': 'https://via.placeholder.com/150',
+            'detail_url': '#',
+            'branch': location,
+            'year': '2016',
+            'make': 'Ford',
+            'model': 'Focus'
+        }
+    ]
+    return sample_inventory
 
 @app.route('/')
 def home():
@@ -152,7 +114,7 @@ def home():
 @app.route('/scrape/<location>')
 def scrape(location):
     logger.info(f"Received request for {location}")
-    inventory = scrape_kenny_upull(location)
+    inventory = get_sample_inventory(location)
     
     return render_template_string("""
     <!DOCTYPE html>
