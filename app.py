@@ -1,120 +1,137 @@
 import os
-import requests
-from flask import Flask, render_template_string
-import logging
-from bs4 import BeautifulSoup
 import time
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import logging
+from flask import Flask, render_template_string
+from webdriver_manager.chrome import ChromeDriverManager
 import json
 
 app = Flask(__name__)
-
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_sample_inventory(location):
-    return [
-        {
-            'title': '2015 Honda Civic',
-            'image_url': 'https://via.placeholder.com/150',
-            'detail_url': '#',
-            'branch': location,
-            'year': '2015',
-            'make': 'Honda',
-            'model': 'Civic'
-        },
-        {
-            'title': '2018 Toyota Camry',
-            'image_url': 'https://via.placeholder.com/150',
-            'detail_url': '#',
-            'branch': location,
-            'year': '2018',
-            'make': 'Toyota',
-            'model': 'Camry'
+class KennyUPullScraper:
+    def __init__(self, location):
+        self.location = location
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.binary_location = os.environ.get("GOOGLE_CHROME_BIN", "/usr/bin/google-chrome")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option("useAutomationExtension", False)
+        
+        self.driver = webdriver.Chrome(
+            service=Service(),
+            options=chrome_options
+        )
+        
+        self.urls = {
+            'Ottawa': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457192&nb_items=42&sort=date",
+            'Gatineau': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457182&nb_items=42&sort=date",
+            'Cornwall': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1576848&nb_items=42&sort=date"
         }
-    ]
 
-def scrape_kenny_upull(location):
-    urls = {
-        'Ottawa': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457192&nb_items=42&sort=date",
-        'Gatineau': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1457182&nb_items=42&sort=date",
-        'Cornwall': "https://kennyupull.com/auto-parts/our-inventory/?branch%5B%5D=1576848&nb_items=42&sort=date"
-    }
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
-    }
-    
-    try:
-        logger.info(f"Starting scrape for {location}")
+    def handle_cookies(self):
+        logger.info("Looking for cookie consent button...")
+        time.sleep(5)
+        try:
+            buttons = self.driver.find_elements(By.TAG_NAME, "button")
+            for button in buttons:
+                if "accept" in button.text.lower():
+                    button.click()
+                    logger.info("Clicked accept cookies button")
+                    time.sleep(2)
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Error handling cookies: {str(e)}")
+            return False
+
+    def scroll_to_load(self, pause_time=2):
+        logger.info("Scrolling to load more content...")
+        last_height = self.driver.execute_script("return document.body.scrollHeight")
+        while True:
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(pause_time)
+            new_height = self.driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
+
+    def scrape_page(self):
+        logger.info(f"Starting scrape for {self.location}...")
         
-        # Add delay to prevent rate limiting
-        time.sleep(1)
-        
-        response = requests.get(urls[location], headers=headers, timeout=20)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        inventory = []
-        
-        # Find all vehicle items
-        vehicle_containers = soup.find_all('div', class_='vehicle-container')
-        
-        if not vehicle_containers:
-            logger.warning(f"No vehicles found for {location}, falling back to sample data")
-            return get_sample_inventory(location)
-        
-        for container in vehicle_containers:
-            try:
-                # Get image
-                image_tag = container.find('img')
-                image_url = image_tag.get('data-src') if image_tag else 'https://via.placeholder.com/150'
-                title = image_tag.get('alt', 'Unknown Vehicle') if image_tag else 'Unknown Vehicle'
-                
-                # Get link
-                link_tag = container.find('a')
-                detail_url = link_tag.get('href', '#') if link_tag else '#'
-                
-                # Extract year, make, model from title
-                parts = title.split()
-                year = parts[0] if parts else "Unknown"
-                make = parts[1] if len(parts) > 1 else "Unknown"
-                model = parts[2] if len(parts) > 2 else "Unknown"
-                
-                car = {
-                    'title': title,
-                    'image_url': image_url,
-                    'detail_url': detail_url,
-                    'branch': location,
-                    'year': year,
-                    'make': make,
-                    'model': model
-                }
-                
-                inventory.append(car)
-                logger.info(f"Successfully processed vehicle: {title}")
-                
-            except Exception as e:
-                logger.error(f"Error processing vehicle: {str(e)}")
-                continue
-        
-        if not inventory:
-            logger.warning(f"No vehicles could be processed for {location}, falling back to sample data")
-            return get_sample_inventory(location)
+        try:
+            self.driver.get(self.urls[self.location])
+            logger.info("Page loaded")
             
-        return inventory
-        
-    except requests.RequestException as e:
-        logger.error(f"Request error for {location}: {str(e)}")
-        return get_sample_inventory(location)
-    except Exception as e:
-        logger.error(f"General error for {location}: {str(e)}")
-        return get_sample_inventory(location)
+            self.handle_cookies()
+            self.scroll_to_load(pause_time=3)
+            
+            logger.info("Waiting for car listings to load...")
+            WebDriverWait(self.driver, 20).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "img[data-src]"))
+            )
+            
+            car_elements = self.driver.find_elements(By.CSS_SELECTOR, "img[data-src]")
+            logger.info(f"Found {len(car_elements)} potential car listings")
+            
+            inventory = []
+            for car_element in car_elements:
+                try:
+                    title = car_element.get_attribute("alt")
+                    image_url = car_element.get_attribute("data-src")
+                    parent_element = car_element.find_element(By.XPATH, "../..")
+                    detail_url = parent_element.find_element(By.TAG_NAME, "a").get_attribute("href")
+                    
+                    try:
+                        date_listed = parent_element.find_element(By.CLASS_NAME, "infos--date").text
+                    except:
+                        date_listed = "N/A"
+
+                    try:
+                        row_info = parent_element.find_element(By.XPATH, ".//p[@class='date info']").text
+                    except:
+                        row_info = "N/A"
+
+                    car = {
+                        'title': title,
+                        'image_url': image_url,
+                        'detail_url': detail_url,
+                        'branch': self.location,
+                        'date_listed': date_listed,
+                        'row': row_info
+                    }
+                    inventory.append(car)
+                    logger.info(f"Added car: {title}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing car element: {e}")
+                    continue
+
+            return inventory
+            
+        except Exception as e:
+            logger.error(f"Error during scraping: {e}")
+            return []
+        finally:
+            self.close()
+
+    def close(self):
+        try:
+            if self.driver:
+                self.driver.quit()
+        except:
+            pass
 
 @app.route('/')
 def home():
@@ -125,24 +142,9 @@ def home():
         <title>Kenny U-Pull Inventory Viewer</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body { 
-                font-family: Arial, sans-serif; 
-                margin: 0; 
-                padding: 20px; 
-                background-color: #f0f2f5; 
-            }
-            .container { 
-                max-width: 1200px; 
-                margin: 0 auto; 
-                text-align: center; 
-            }
-            .button-container { 
-                display: flex; 
-                flex-wrap: wrap; 
-                justify-content: center; 
-                gap: 20px; 
-                margin-top: 30px; 
-            }
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f0f2f5; }
+            .container { max-width: 1200px; margin: 0 auto; text-align: center; }
+            .button-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 30px; }
             .button {
                 padding: 15px 30px;
                 background-color: #007bff;
@@ -154,18 +156,9 @@ def home():
                 text-decoration: none;
                 transition: background-color 0.3s;
             }
-            .button:hover { 
-                background-color: #0056b3; 
-            }
-            .loading {
-                display: none;
-                margin-top: 20px;
-            }
-            @media (max-width: 600px) { 
-                .button { 
-                    width: 100%; 
-                } 
-            }
+            .button:hover { background-color: #0056b3; }
+            .loading { display: none; margin-top: 20px; }
+            @media (max-width: 600px) { .button { width: 100%; } }
         </style>
         <script>
             function showLoading(location) {
@@ -193,7 +186,8 @@ def home():
 @app.route('/scrape/<location>')
 def scrape(location):
     logger.info(f"Received request for {location}")
-    inventory = scrape_kenny_upull(location)
+    scraper = KennyUPullScraper(location)
+    inventory = scraper.scrape_page()
     
     return render_template_string("""
     <!DOCTYPE html>
@@ -202,16 +196,8 @@ def scrape(location):
         <title>{{ location }} Inventory - Kenny U-Pull</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body { 
-                font-family: Arial, sans-serif; 
-                margin: 0; 
-                padding: 20px; 
-                background-color: #f0f2f5; 
-            }
-            .container { 
-                max-width: 1200px; 
-                margin: 0 auto; 
-            }
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f0f2f5; }
+            .container { max-width: 1200px; margin: 0 auto; }
             .grid {
                 display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
@@ -232,14 +218,8 @@ def scrape(location):
                 object-fit: cover;
                 border-radius: 10px;
             }
-            .card h3 {
-                margin: 10px 0;
-                color: #333;
-            }
-            .card p {
-                margin: 5px 0;
-                color: #666;
-            }
+            .card h3 { margin: 10px 0; color: #333; }
+            .card p { margin: 5px 0; color: #666; }
             .back-link {
                 display: inline-block;
                 padding: 10px 20px;
@@ -248,36 +228,21 @@ def scrape(location):
                 text-decoration: none;
                 border-radius: 5px;
                 margin: 20px;
-                transition: background-color 0.3s;
             }
-            .back-link:hover {
-                background-color: #0056b3;
-            }
-            .notice {
-                background-color: #fff3cd;
-                border: 1px solid #ffeeba;
-                color: #856404;
-                padding: 10px;
-                margin: 20px 0;
-                border-radius: 5px;
-                text-align: center;
-            }
+            .back-link:hover { background-color: #0056b3; }
         </style>
     </head>
     <body>
         <div class="container">
             <h1 style="color: #007bff; text-align: center;">{{ location }} Inventory</h1>
-            {% if inventory|length == 2 %}
-            <div class="notice">
-                ⚠️ Showing sample data due to temporary access issues. Please try again later for live data.
-            </div>
-            {% endif %}
             <div class="grid">
             {% for car in inventory %}
                 <div class="card">
                     <img src="{{ car['image_url'] }}" alt="{{ car['title'] }}" onerror="this.src='https://via.placeholder.com/150'">
                     <h3>{{ car['title'] }}</h3>
-                    <p>Branch: {{ car['branch'] }}</p>
+                    <p><strong>Branch:</strong> {{ car['branch'] }}</p>
+                    <p><strong>Date Listed:</strong> {{ car['date_listed'] }}</p>
+                    <p><strong>Row:</strong> {{ car['row'] }}</p>
                     {% if car['detail_url'] != '#' %}
                     <p><a href="{{ car['detail_url'] }}" target="_blank" style="color: #007bff;">View Details</a></p>
                     {% endif %}
